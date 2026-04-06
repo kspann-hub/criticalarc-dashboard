@@ -6,28 +6,7 @@ from datetime import datetime
 from utils.gsheets import load_project_data
 from utils.filters import apply_filters
 
-# ─── Data Prep ────────────────────────────────────────────────────────────────
-def prep_issues(df):
-    if df.empty:
-        return df
-    df = df.copy()
-    df['date_created'] = pd.to_datetime(df['date_created'], errors='coerce')
-    df['date_closed'] = pd.to_datetime(df['date_closed'], errors='coerce')
-    today = pd.Timestamp.now()
-    df['days_open'] = (today - df['date_created']).dt.days.fillna(0).astype(int)
 
-    def aging_cat(row):
-        if row['status'] == 'Closed':
-            return 'Closed'
-        d = row['days_open']
-        if d > 60:
-            return '>60 Days'
-        elif d >= 45:
-            return '45-60 Days'
-        return 'Under 45 Days'
-
-    df['aging_category'] = df.apply(aging_cat, axis=1)
-    return df
 
 # ─── Chart Helpers ────────────────────────────────────────────────────────────
 def plotly_bar(df, x, y, title, color=None, color_map=None, orientation='v'):
@@ -94,14 +73,12 @@ def section(label):
 
 # ─── Main Render ──────────────────────────────────────────────────────────────
 def render(config: dict, filters: dict):
-    # Load data
     with st.spinner("Loading data..."):
         try:
             all_sheets = load_project_data(config["sheet_name"])
-            issues_raw = prep_issues(all_sheets.get('Issues', pd.DataFrame()))
+            issues_raw = all_sheets.get('Issues', pd.DataFrame())
             checklists_raw = all_sheets.get('Checklists', pd.DataFrame())
             tests_raw = all_sheets.get('Tests', pd.DataFrame())
-            people_raw = all_sheets.get('People', pd.DataFrame())
         except Exception as e:
             st.error(f"Error loading data: {e}")
             return
@@ -110,6 +87,7 @@ def render(config: dict, filters: dict):
     issues = apply_filters(issues_raw, filters)
     checklists = apply_filters(checklists_raw, filters)
     tests = apply_filters(tests_raw, filters)
+
 
     # ─── Tabs ─────────────────────────────────────────────────────────────────
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -180,48 +158,59 @@ def render(config: dict, filters: dict):
                                             color_map=status_colors),
                                     use_container_width=True)
 
-            section("Issues by Division")
-            if 'discipline' in issues.columns:
-                disc_counts = (open_issues.groupby('discipline')
-                               .size().reset_index(name='Count')
-                               .sort_values('Count', ascending=True).tail(15))
-                fig = plotly_bar(disc_counts, 'Count', 'discipline',
-                                 'Open Issues per Division', orientation='h')
-                fig.update_layout(height=400, yaxis_title="", xaxis_title="Issue Count")
-                st.plotly_chart(fig, use_container_width=True)
-
             section("Issues by Contractor")
-            if 'assigned_name' in issues.columns:
-                contractor_counts = (open_issues.groupby('assigned_name')
-                                     .size().reset_index(name='Count')
-                                     .sort_values('Count', ascending=False).head(15))
-                fig = plotly_bar(contractor_counts, 'assigned_name', 'Count',
-                                 'Open Issues per Contractor', color='Count')
+            if 'assigned_company' in issues.columns:
+                contractor_counts = (open_issues.groupby('assigned_company')
+                                    .size().reset_index(name='Count')
+                                    .sort_values('Count', ascending=False).head(15))
+                fig = plotly_bar(contractor_counts, 'assigned_company', 'Count',
+                                'Open Issues per Contractor', color='Count')
                 fig.update_layout(xaxis_tickangle=-35)
                 st.plotly_chart(fig, use_container_width=True)
 
+
             section("Aging Issues Detail")
+
+            # Define once, used in both aging table and all issues expander
+            def format_assigned(row):
+                name = str(row.get('assigned_name', '')).strip()
+                company = str(row.get('assigned_company', '')).strip()
+                if name and company and name != company:
+                    return f"{name} ({company})"
+                return company if company else name
+
             aging_issues = issues[issues['aging_category'].isin(['>60 Days', '45-60 Days'])].copy()
             if not aging_issues.empty:
                 aging_issues['Aging'] = aging_issues['aging_category'].apply(
                     lambda c: '🔴 >60 Days' if c == '>60 Days' else '🟡 45-60 Days'
                 )
+                aging_issues['Assigned To'] = aging_issues.apply(format_assigned, axis=1)
+
                 display_cols = [c for c in ['name', 'Aging', 'days_open', 'priority',
-                                            'discipline', 'assigned_name', 'status',
+                                            'discipline', 'Assigned To', 'status',
                                             'description'] if c in aging_issues.columns]
                 st.dataframe(aging_issues[display_cols].rename(columns={
                     'name': 'Issue #', 'days_open': 'Days Open', 'priority': 'Priority',
-                    'discipline': 'Division', 'assigned_name': 'Assigned To',
-                    'status': 'Status', 'description': 'Description'
+                    'discipline': 'Division', 'status': 'Status', 'description': 'Description'
                 }), use_container_width=True, hide_index=True)
             else:
                 st.success("✅ No aging issues with current filters.")
 
             with st.expander("📄 View All Issues"):
+                all_issues_display = issues.copy()
+                all_issues_display['Assigned To'] = all_issues_display.apply(format_assigned, axis=1)
+
                 view_cols = [c for c in ['name', 'priority', 'status', 'discipline',
-                                         'assigned_name', 'days_open', 'date_created',
-                                         'description'] if c in issues.columns]
-                st.dataframe(issues[view_cols], use_container_width=True, hide_index=True)
+                                        'Assigned To', 'days_open', 'date_created',
+                                        'description'] if c in all_issues_display.columns]
+                st.dataframe(
+                    all_issues_display[view_cols].rename(columns={
+                        'name': 'Issue #', 'priority': 'Priority', 'status': 'Status',
+                        'discipline': 'Division', 'days_open': 'Days Open',
+                        'date_created': 'Date Created', 'description': 'Description'
+                    }),
+                    use_container_width=True, hide_index=True
+                )
 
     # ══════════════════════════════════════════════════════════════
     # TAB 2 — CHECKLIST (PFC)
@@ -246,19 +235,51 @@ def render(config: dict, filters: dict):
             with c4: kpi_card("Assigned (Not Started)", assigned_cl, "kpi-yellow")
 
             col_l, col_r = st.columns(2)
+
             with col_l:
                 status_counts = checklists['status'].value_counts().reset_index()
                 status_counts.columns = ['Status', 'Count']
+                
                 status_colors = {
-                    'Verified': '#10b981', 'Checklist Complete': '#34d399',
-                    'Verified - Not Included in Sampling': '#6ee7b7',
-                    'In Progress': '#3b82f6', 'Assigned': '#f59e0b',
-                    'Script In Development': '#8b5cf6'
+                    'Verified': '#39B54A',
+                    'Checklist Complete': '#5DD96A',
+                    'Verified - Not Included in Sampling': '#8AE895',
+                    'In Progress': '#4A90D9',
+                    'Assigned': '#F4B942',
+                    'Script In Development': '#6E7FD4'
                 }
-                color_list = [status_colors.get(s, '#6b7280') for s in status_counts['Status']]
-                st.plotly_chart(plotly_donut(status_counts['Status'], status_counts['Count'],
-                                             "Checklists by Status", color_list),
-                                use_container_width=True)
+                # Any status not in the map gets slate grey
+                color_list = [status_colors.get(s, '#8A8F98') for s in status_counts['Status']]
+
+                fig = go.Figure(go.Pie(
+                    labels=status_counts['Status'],
+                    values=status_counts['Count'],
+                    hole=0.65,
+                    marker_colors=color_list,
+                    marker=dict(line=dict(color='#2D3035', width=2)),
+                    textinfo='none',
+                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>%{percent}<extra></extra>'
+                ))
+                fig.update_layout(
+                    title=dict(
+                        text="Checklists by Status",
+                        font=dict(size=12, color='#8A8F98', family='Barlow Condensed')
+                    ),
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    font=dict(family='Barlow, sans-serif', size=11, color='#8A8F98'),
+                    showlegend=True,
+                    legend=dict(
+                        bgcolor='rgba(0,0,0,0)',
+                        bordercolor='rgba(0,0,0,0)',
+                        font=dict(size=11, color='#8A8F98', family='Barlow, sans-serif'),
+                        orientation='v',
+                        x=1.02,
+                        y=0.5
+                    ),
+                    margin=dict(t=40, b=10, l=10, r=150),
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
             with col_r:
                 if 'discipline' in checklists.columns:
@@ -276,15 +297,15 @@ def render(config: dict, filters: dict):
                                     use_container_width=True)
 
             section("Completion by Contractor")
-            if 'assigned_name' in checklists.columns:
-                contractor_cl = checklists.groupby('assigned_name').agg(
+            if 'assigned_company' in checklists.columns:
+                contractor_cl = checklists.groupby('assigned_company').agg(
                     Total=('status', 'count'),
                     Completed=('status', lambda x: x.isin(verified_statuses).sum())
                 ).reset_index()
                 contractor_cl['Completion %'] = (
                     contractor_cl['Completed'] / contractor_cl['Total'] * 100
                 ).round(1)
-                st.dataframe(contractor_cl.rename(columns={'assigned_name': 'Contractor'}),
+                st.dataframe(contractor_cl.rename(columns={'assigned_company': 'Contractor'}),
                              use_container_width=True, hide_index=True)
 
             if 'type_name' in checklists.columns:

@@ -2,6 +2,7 @@ import streamlit as st
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
+from utils.cleaning import clean_all
 
 @st.cache_data(ttl=300)
 def load_project_data(sheet_name: str) -> dict:
@@ -15,8 +16,11 @@ def load_project_data(sheet_name: str) -> dict:
     client = gspread.authorize(creds)
     spreadsheet = client.open(sheet_name)
 
-    sheets = {}
+    # Load raw sheets
+    raw = {}
     for ws in spreadsheet.worksheets():
         records = ws.get_all_records()
-        sheets[ws.title] = pd.DataFrame(records) if records else pd.DataFrame()
-    return sheets
+        raw[ws.title] = pd.DataFrame(records) if records else pd.DataFrame()
+
+    # Clean and return
+    return clean_all(raw)

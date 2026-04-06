@@ -28,7 +28,18 @@ st.markdown("""
         background-color: #2D3035;
         border-right: 1px solid #3E4248;
     }
-    section[data-testid="stSidebar"] * { color: #F0F0F0 !important; }
+   section[data-testid="stSidebar"] * { color: #C8CDD4 !important; }
+
+    section[data-testid="stSidebar"] .stSelectbox label,
+    section[data-testid="stSidebar"] .element-container p,
+    section[data-testid="stSidebar"] .stMarkdown p {
+        font-size: 11px !important;
+        letter-spacing: 1px !important;
+    }
+
+    section[data-testid="stSidebar"] .stSelectbox div {
+        font-size: 13px !important;
+    }
 
     .kpi-card {
         background: #2D3035;
@@ -75,14 +86,21 @@ st.markdown("""
     }
 
     .dash-title {
-        font-family: 'Barlow Condensed', sans-serif;
-        font-size: 28px;
-        font-weight: 700;
-        letter-spacing: 0.5px;
-        color: #F0F0F0;
-        margin: 0;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 36px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #F0F0F0;
+    margin: 0;
+    text-transform: uppercase;
     }
-    .dash-sub { font-size: 13px; color: #8A8F98; margin: 2px 0 0 0; }
+            
+    .dash-sub {
+        font-size: 14px;
+        color: #8A8F98;
+        margin: 4px 0 0 0;
+        letter-spacing: 0.5px;
+    }
 
     .stTabs [data-baseweb="tab-list"] {
         gap: 4px;
@@ -198,9 +216,9 @@ with st.sidebar:
         disciplines += sorted([d for d in issues_raw["discipline"].dropna().unique() if d])
 
     contractors = ["All"]
-    if not issues_raw.empty and "assigned_name" in issues_raw.columns:
-        contractors += sorted([c for c in issues_raw["assigned_name"].dropna().unique() if c])
-
+    if not issues_raw.empty and "assigned_company" in issues_raw.columns:
+        contractors += sorted([c for c in issues_raw["assigned_company"].dropna().unique() if c])
+    
     filters = {
         "discipline": st.selectbox("Division / Discipline", disciplines),
         "contractor": st.selectbox("Contractor / Assigned To", contractors),
@@ -217,11 +235,26 @@ with st.sidebar:
         st.rerun()
 
 # ─── Header ───────────────────────────────────────────────────────────────────
-st.markdown(f"""
-<p class="dash-title">{config['project_name']}</p>
-<p class="dash-sub">{config.get('subtitle', '')}</p>
-""", unsafe_allow_html=True)
-st.markdown("---")
+st.html(f"""
+<div style="padding: 8px 0 16px 0;">
+    <div style="
+        font-family: 'Barlow Condensed', sans-serif;
+        font-size: 42px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        color: #374151;
+        text-transform: uppercase;
+        line-height: 1.1;
+    ">{config['project_name']}</div>
+    <div style="
+        font-family: 'Barlow', sans-serif;
+        font-size: 14px;
+        color: #8A8F98;
+        margin-top: 4px;
+        letter-spacing: 0.5px;
+    ">{config.get('subtitle', '')}</div>
+</div>
+""")
 
 # ─── Render Project Layout ─────────────────────────────────────────────────────
 layout_path = os.path.join(os.path.dirname(__file__), "projects", selected_key, "layout.py")
