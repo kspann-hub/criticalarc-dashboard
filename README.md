@@ -140,6 +140,28 @@ identifier = "your-identifier-here"
 
 **Never commit `secrets.toml` to GitHub.** It is listed in `.gitignore`.
 
+## Setup & Secrets
+
+This app requires API credentials that **must not be committed to the repo**.
+
+### Local Development
+Create `.streamlit/secrets.toml` in your project root:
+```toml
+[cxalloy]
+api_key = "your-api-key-here"
+identifier = "your-identifier-here"
+```
+
+This file is listed in `.gitignore` and should **never** be pushed to GitHub.
+
+### Deployment (Streamlit Community Cloud)
+Add your secrets in the Streamlit dashboard:
+1. Go to your app → Settings → Secrets
+2. Paste the contents of your `secrets.toml` file
+3. Save
+
+⚠️ **If secrets are accidentally committed**, rotate your API keys immediately — git history retains all prior commits even after deletion.
+
 ---
 
 ## Running the App
