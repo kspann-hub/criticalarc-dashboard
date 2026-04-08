@@ -96,6 +96,12 @@ def flatten_extended_status(df: pd.DataFrame, fields: list) -> pd.DataFrame:
     parsed = df['extended_status'].apply(safe_parse)
     for field in fields:
         df[field] = parsed.apply(lambda x: x.get(field, '') if isinstance(x, dict) else '')
+        if field.endswith('_date'):
+            df[field] = df[field].apply(
+                lambda v: str(v).strip().split('\n')[-1].strip()
+                if pd.notna(v) and str(v).strip() else ''
+            )
+            df[field] = df[field].replace('', pd.NA)
     return df
 
 # ─── Issues ───────────────────────────────────────────────────────────────────

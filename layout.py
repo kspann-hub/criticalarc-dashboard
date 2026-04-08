@@ -191,36 +191,43 @@ def render(config: dict, filters: dict, all_sheets: dict = None):
                 fig.update_layout(xaxis_tickangle=-35)
                 st.plotly_chart(fig, use_container_width=True)
 
-            section("Aging Issues Detail")
-            aging_issues = issues[issues['aging_category'].isin(
-                ['>60 Days', '45-60 Days'])].copy()
-            if not aging_issues.empty:
-                aging_issues['Aging'] = aging_issues['aging_category'].apply(
-                    lambda c: '🔴 >60 Days' if c == '>60 Days' else '🟡 45-60 Days'
+            section("Open Issues Detail")
+            open_detail = issues[issues['status'] != 'Closed'].copy()
+            if not open_detail.empty:
+                open_detail['Aging'] = open_detail['aging_category'].apply(
+                    lambda c: '🔴 >60 Days' if c == '>60 Days'
+                    else '🟡 45-60 Days' if c == '45-60 Days' else '🟢 Under 45 Days'
                 )
-                aging_issues['Assigned To'] = aging_issues.apply(format_assigned, axis=1)
+                open_detail['Assigned To'] = open_detail.apply(format_assigned, axis=1)
                 display_cols = [c for c in ['name', 'Aging', 'days_open', 'priority',
                                             'discipline', 'Assigned To', 'status',
-                                            'description'] if c in aging_issues.columns]
-                st.dataframe(aging_issues[display_cols].rename(columns={
+                                            'description'] if c in open_detail.columns]
+                st.dataframe(open_detail[display_cols].rename(columns={
                     'name': 'Issue #', 'days_open': 'Days Open', 'priority': 'Priority',
                     'discipline': 'Division', 'status': 'Status', 'description': 'Description'
                 }), use_container_width=True, hide_index=True)
             else:
-                st.success("✅ No aging issues with current filters.")
+                st.success("✅ No open issues with current filters.")
 
             with st.expander("📄 View All Issues"):
                 all_issues_display = issues.copy()
                 all_issues_display['Assigned To'] = all_issues_display.apply(
                     format_assigned, axis=1)
+                for dc in ['date_created', 'in_progress_date', 'date_closed']:
+                    if dc in all_issues_display.columns:
+                        all_issues_display[dc] = pd.to_datetime(
+                            all_issues_display[dc], errors='coerce'
+                        ).dt.strftime('%m/%d/%Y').fillna('')
                 view_cols = [c for c in ['name', 'priority', 'status', 'discipline',
-                                         'Assigned To', 'days_open', 'date_created',
+                                         'Assigned To', 'date_created', 'in_progress_date',
+                                         'date_closed', 'days_open',
                                          'description'] if c in all_issues_display.columns]
                 st.dataframe(
                     all_issues_display[view_cols].rename(columns={
                         'name': 'Issue #', 'priority': 'Priority', 'status': 'Status',
                         'discipline': 'Division', 'days_open': 'Days Open',
-                        'date_created': 'Date Created', 'description': 'Description'
+                        'date_created': 'Date Created', 'in_progress_date': 'In Progress Date',
+                        'date_closed': 'Date Closed', 'description': 'Description'
                     }), use_container_width=True, hide_index=True)
 
     # ══════════════════════════════════════════════════════════════
@@ -246,6 +253,53 @@ def render(config: dict, filters: dict, all_sheets: dict = None):
             with c4: kpi_card("Assigned (Not Started)", assigned_cl, "kpi-yellow")
 
             col_l, col_r = st.columns(2)
+            with col_r:
+                section("Checklist Pipeline")
+                stage_cols = [
+                    ('Script in Development', 'script_in_development_date'),
+                    ('Assigned', 'assigned_date'),
+                    ('In Progress', 'in_progress_date'),
+                    ('Contractor Complete', 'contractor_complete_date'),
+                    ('Verified', 'verified_date'),
+                ]
+                pipeline_data = []
+                total = len(checklists)
+                for label, col in stage_cols:
+                    if col in checklists.columns:
+                        reached = checklists[col].notna().sum()
+                    else:
+                        reached = 0
+                    pipeline_data.append({'Stage': label, 'Reached': reached})
+
+                pipeline_df = pd.DataFrame(pipeline_data)
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=pipeline_df['Reached'], y=pipeline_df['Stage'],
+                    orientation='h',
+                    marker=dict(
+                        color=pipeline_df['Reached'],
+                        colorscale=[[0, '#3E4248'], [0.5, '#4A90D9'], [1, '#39B54A']],
+                        showscale=False
+                    ),
+                    text=pipeline_df.apply(
+                        lambda r: f"{int(r['Reached'])} / {total}  ({r['Reached']/total*100:.1f}%)"
+                        if total > 0 else '0', axis=1),
+                    textposition='inside',
+                    textfont=dict(color='#F0F0F0', family='Barlow, sans-serif', size=12),
+                ))
+                fig.update_layout(
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                    font=dict(family='Barlow, sans-serif', size=11, color='#8A8F98'),
+                    margin=dict(t=10, b=10, l=10, r=10),
+                    xaxis=dict(gridcolor='#3E4248', tickfont=dict(color='#8A8F98'),
+                               range=[0, total * 1.05]),
+                    yaxis=dict(tickfont=dict(size=11, color='#8A8F98'),
+                               categoryorder='array',
+                               categoryarray=list(reversed(pipeline_df['Stage']))),
+                    height=280
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
             with col_l:
                 status_counts = checklists['status'].value_counts().reset_index()
                 status_counts.columns = ['Status', 'Count']
@@ -253,64 +307,108 @@ def render(config: dict, filters: dict, all_sheets: dict = None):
                     'Verified': '#39B54A',
                     'Checklist Complete': '#5DD96A',
                     'Verified - Not Included in Sampling': '#8AE895',
+                    'Contractor Complete': '#2E8B57',
                     'In Progress': '#4A90D9',
                     'Assigned': '#F4B942',
-                    'Script In Development': '#6E7FD4'
+                    'Script in Development': '#6E7FD4',
+                    'Script In Development': '#6E7FD4',
+                    'Removed from Scope': '#3E4248',
                 }
                 color_list = [status_colors.get(s, '#8A8F98') for s in status_counts['Status']]
-                fig = go.Figure(go.Pie(
-                    labels=status_counts['Status'], values=status_counts['Count'],
-                    hole=0.65, marker_colors=color_list,
-                    marker=dict(line=dict(color='#2D3035', width=2)),
-                    textinfo='none',
-                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>%{percent}<extra></extra>'
-                ))
-                fig.update_layout(
-                    title=dict(text="Checklists by Status",
-                               font=dict(size=12, color='#8A8F98', family='Barlow Condensed')),
-                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                    font=dict(family='Barlow, sans-serif', size=11, color='#8A8F98'),
-                    showlegend=True,
-                    legend=dict(bgcolor='rgba(0,0,0,0)',
-                                font=dict(size=11, color='#8A8F98', family='Barlow, sans-serif'),
-                                orientation='v', x=1.02, y=0.5),
-                    margin=dict(t=40, b=10, l=10, r=150),
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(plotly_donut(status_counts['Status'],
+                                             status_counts['Count'],
+                                             'Checklists by Current Status',
+                                             color_list),
+                                use_container_width=True)
 
-            with col_r:
-                if 'discipline' in checklists.columns:
-                    disc_cl    = checklists.groupby(['discipline', 'status']).size().reset_index(name='Count')
-                    disc_total = disc_cl.groupby('discipline')['Count'].sum().reset_index()
-                    disc_done  = (disc_cl[disc_cl['status'].isin(verified_statuses)]
-                                  .groupby('discipline')['Count'].sum().reset_index())
-                    disc_done.columns = ['discipline', 'Completed']
-                    disc_pct = disc_total.merge(disc_done, on='discipline', how='left').fillna(0)
-                    disc_pct['Completion %'] = (
-                        disc_pct['Completed'] / disc_pct['Count'] * 100).round(1)
-                    disc_pct = disc_pct.sort_values('Completion %', ascending=True).tail(12)
-                    st.plotly_chart(plotly_hbar_pct(disc_pct, 'discipline', 'Completion %',
-                                                    'Checklist Completion % by Division'),
-                                    use_container_width=True)
-
-            section("Completion by Contractor")
-            if 'assigned_company' in checklists.columns:
-                contractor_cl = checklists.groupby('assigned_company').agg(
+            section("Completion by Discipline")
+            if 'discipline' in checklists.columns:
+                disc_comp = checklists.groupby('discipline').agg(
                     Total=('status', 'count'),
                     Completed=('status', lambda x: x.isin(verified_statuses).sum())
                 ).reset_index()
-                contractor_cl['Completion %'] = (
-                    contractor_cl['Completed'] / contractor_cl['Total'] * 100).round(1)
-                st.dataframe(
-                    contractor_cl.rename(columns={'assigned_company': 'Contractor'}),
-                    use_container_width=True, hide_index=True)
+                disc_comp['Remaining'] = disc_comp['Total'] - disc_comp['Completed']
+                disc_comp['Completion %'] = (
+                    disc_comp['Completed'] / disc_comp['Total'] * 100).round(1)
+                disc_comp = disc_comp.sort_values('Total', ascending=True)
 
-            if 'type_name' in checklists.columns:
-                section("By Checklist Type")
-                type_counts = checklists['type_name'].value_counts().reset_index()
-                type_counts.columns = ['Type', 'Count']
-                st.plotly_chart(plotly_bar(type_counts, 'Type', 'Count', 'Checklists by Type'),
-                                use_container_width=True)
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    y=disc_comp['discipline'], x=disc_comp['Completed'],
+                    name='Completed', orientation='h',
+                    marker_color='#39B54A',
+                    text=disc_comp.apply(
+                        lambda r: f"{int(r['Completed'])} ({r['Completion %']}%)"
+                        if r['Completed'] > 0 else '', axis=1),
+                    textposition='inside',
+                    textfont=dict(color='#F0F0F0', family='Barlow, sans-serif', size=11)
+                ))
+                fig.add_trace(go.Bar(
+                    y=disc_comp['discipline'], x=disc_comp['Remaining'],
+                    name='Remaining', orientation='h',
+                    marker_color='#3E4248',
+                    text=disc_comp['Total'].apply(lambda t: str(int(t))),
+                    textposition='outside',
+                    textfont=dict(color='#8A8F98', family='Barlow, sans-serif', size=11)
+                ))
+                fig.update_layout(
+                    barmode='stack',
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                    font=dict(family='Barlow, sans-serif', size=11, color='#8A8F98'),
+                    margin=dict(t=10, b=10, l=10, r=40),
+                    legend=dict(bgcolor='rgba(0,0,0,0)',
+                                font=dict(color='#8A8F98'), orientation='h',
+                                x=0.5, xanchor='center', y=-0.08),
+                    xaxis=dict(gridcolor='#3E4248', tickfont=dict(color='#8A8F98')),
+                    yaxis=dict(tickfont=dict(size=10, color='#8A8F98')),
+                    height=max(250, len(disc_comp) * 45)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            section("Completion by Contractor")
+            if 'assigned_company' in checklists.columns:
+                unassigned_vals = ['not assigned yet', 'not assigned', '', 'nan', 'none']
+
+                def classify_assignment(row):
+                    name = str(row.get('assigned_company', '')).strip().lower()
+                    atype = str(row.get('assigned_type', '')).strip().lower()
+                    if name in unassigned_vals:
+                        return 'unassigned'
+                    if atype == 'role':
+                        return 'role'
+                    return 'contractor'
+
+                checklists['_assign_type'] = checklists.apply(classify_assignment, axis=1)
+
+                # ── Contractor table (real companies only) ──
+                contractor_cl = checklists[checklists['_assign_type'] == 'contractor']
+                if not contractor_cl.empty:
+                    contractor_summary = contractor_cl.groupby('assigned_company').agg(
+                        Total=('status', 'count'),
+                        Completed=('status', lambda x: x.isin(verified_statuses).sum())
+                    ).reset_index()
+                    contractor_summary['Completion %'] = (
+                        contractor_summary['Completed'] / contractor_summary['Total'] * 100
+                    ).round(1)
+                    st.dataframe(
+                        contractor_summary.rename(columns={'assigned_company': 'Contractor'}),
+                        use_container_width=True, hide_index=True)
+
+                # ── Role / Unassigned breakdown ──
+                pending = checklists[checklists['_assign_type'].isin(['role', 'unassigned'])]
+                if not pending.empty:
+                    section("Pending Assignment")
+                    pending_summary = pending.groupby('assigned_company').agg(
+                        Count=('status', 'count')
+                    ).reset_index().sort_values('Count', ascending=False)
+                    pending_summary['assigned_company'] = pending_summary['assigned_company'].apply(
+                        lambda x: '⚠️ No Contractor Assigned'
+                        if str(x).strip().lower() in unassigned_vals else x
+                    )
+                    st.dataframe(
+                        pending_summary.rename(columns={'assigned_company': 'Role / Status'}),
+                        use_container_width=True, hide_index=True)
+            # ... rest stays the same
 
     # ══════════════════════════════════════════════════════════════
     # TAB 3 — FUNCTIONAL TESTS
@@ -366,7 +464,8 @@ def render(config: dict, filters: dict, all_sheets: dict = None):
                     st.plotly_chart(plotly_hbar_pct(disc_tests, 'discipline', 'Pass Rate %',
                                                     'Pass Rate % by Division'),
                                     use_container_width=True)
-
+                    
+                    
             if 'asset_type' in tests.columns:
                 section("Pass Rate by Equipment Type")
                 asset_tests = tests.groupby('asset_type').agg(
