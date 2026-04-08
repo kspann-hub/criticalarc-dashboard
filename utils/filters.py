@@ -29,19 +29,23 @@ def resolve_company(df: pd.DataFrame, lookup: dict) -> pd.DataFrame:
     df['assigned_company'] = df.apply(resolve, axis=1)
     return df
 
+
 def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
-    if df.empty:
-        return df
+    if df is None or df.empty:
+        return pd.DataFrame()
+    
     filtered = df.copy()
 
     discipline = filters.get("discipline", "All")
     contractor = filters.get("contractor", "All")
-    status = filters.get("status", "All")
+    status     = filters.get("status", "All")
 
     if discipline != "All" and "discipline" in filtered.columns:
         filtered = filtered[filtered["discipline"] == discipline]
-    if contractor != "All" and "assigned_name" in filtered.columns:
-        filtered = filtered[filtered["assigned_name"] == contractor]
+
+    if contractor != "All" and "assigned_company" in filtered.columns:
+        filtered = filtered[filtered["assigned_company"] == contractor]
+
     if status != "All" and "status" in filtered.columns:
         filtered = filtered[filtered["status"] == status]
 
