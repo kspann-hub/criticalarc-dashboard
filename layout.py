@@ -114,7 +114,7 @@ def render(config: dict, filters: dict, all_sheets: dict = None):
         "📋 Issue Tracking",
         "✅ Checklist (PFC)",
         "🧪 Functional Tests",
-        "🛗 Vertical Conveyance"
+        "🔧 Equipment"
     ])
 
     # ══════════════════════════════════════════════════════════════
@@ -444,6 +444,7 @@ def render(config: dict, filters: dict, all_sheets: dict = None):
                     'Partially Passed (Test to be Repeated)': '#F4B942',
                     'In Progress': '#4A90D9',
                     'Assigned': '#8A8F98',
+                    'Script In Development': '#6E7FD4',
                     'Deferred to 1B': '#6E7FD4',
                     'Voided': '#3E4248'
                 }
@@ -453,19 +454,93 @@ def render(config: dict, filters: dict, all_sheets: dict = None):
                                 use_container_width=True)
 
             with col_r:
-                if 'discipline' in tests.columns:
-                    disc_tests = tests.groupby('discipline').agg(
-                        Total=('status', 'count'),
-                        Passed=('status', lambda x: (x == 'Passed').sum())
+                if 'attempt_count' in tests.columns:
+                    tests['attempt_count'] = pd.to_numeric(tests['attempt_count'], errors='coerce').fillna(1).astype(int)
+                    attempt_col = 'asset_type' if 'asset_type' in tests.columns else 'discipline'
+                    attempt_summary = tests.groupby(attempt_col).agg(
+                        Total_Tests=('status', 'count'),
+                        Avg_Attempts=('attempt_count', 'mean'),
+                        Max_Attempts=('attempt_count', 'max'),
+                        Retests=('attempt_count', lambda x: (x > 1).sum())
                     ).reset_index()
-                    disc_tests['Pass Rate %'] = (
-                        disc_tests['Passed'] / disc_tests['Total'] * 100).round(1)
-                    disc_tests = disc_tests.sort_values('Pass Rate %', ascending=True).tail(12)
-                    st.plotly_chart(plotly_hbar_pct(disc_tests, 'discipline', 'Pass Rate %',
-                                                    'Pass Rate % by Division'),
-                                    use_container_width=True)
-                    
-                    
+                    attempt_summary['Avg_Attempts'] = attempt_summary['Avg_Attempts'].round(2)
+                    attempt_summary = attempt_summary.sort_values('Avg_Attempts', ascending=True)
+
+                    fig = go.Figure(go.Bar(
+                        y=attempt_summary[attempt_col],
+                        x=attempt_summary['Avg_Attempts'],
+                        orientation='h',
+                        marker=dict(
+                            color=attempt_summary['Avg_Attempts'],
+                            colorscale=[[0, '#39B54A'], [0.5, '#F4B942'], [1, '#E04040']],
+                            showscale=False
+                        ),
+                        text=attempt_summary.apply(
+                            lambda r: f"Avg: {r['Avg_Attempts']}  |  Retests: {int(r['Retests'])}",
+                            axis=1),
+                        textposition='inside',
+                        textfont=dict(color='#F0F0F0', family='Barlow, sans-serif', size=11)
+                    ))
+                    fig.update_layout(
+                        title=dict(text='Avg Attempts by Equipment Type',
+                                   font=dict(size=12, color='#8A8F98', family='Barlow Condensed')),
+                        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                        font=dict(family='Barlow, sans-serif', size=11, color='#8A8F98'),
+                        margin=dict(t=40, b=10, l=10, r=10),
+                        xaxis=dict(gridcolor='#3E4248', tickfont=dict(color='#8A8F98')),
+                        yaxis=dict(tickfont=dict(size=10, color='#8A8F98')),
+                        height=300
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+            # ── Completion by Discipline (stacked bar) ──
+            section("Tests by Division")
+            if 'discipline' in tests.columns:
+                tests['discipline'] = tests['discipline'].fillna('Unassigned Division')
+                disc_tests = tests.groupby('discipline').agg(
+                    # ... rest stays the same
+                    Total=('status', 'count'),
+                    Passed=('status', lambda x: (x == 'Passed').sum())
+                ).reset_index()
+                disc_tests['Remaining'] = disc_tests['Total'] - disc_tests['Passed']
+                disc_tests['Pass %'] = (
+                    disc_tests['Passed'] / disc_tests['Total'] * 100).round(1)
+                disc_tests = disc_tests.sort_values('Total', ascending=True)
+
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    y=disc_tests['discipline'], x=disc_tests['Passed'],
+                    name='Passed', orientation='h',
+                    marker_color='#39B54A',
+                    text=disc_tests.apply(
+                        lambda r: f"{int(r['Passed'])} ({r['Pass %']}%)"
+                        if r['Passed'] > 0 else '', axis=1),
+                    textposition='inside',
+                    textfont=dict(color='#F0F0F0', family='Barlow, sans-serif', size=11)
+                ))
+                fig.add_trace(go.Bar(
+                    y=disc_tests['discipline'], x=disc_tests['Remaining'],
+                    name='Remaining', orientation='h',
+                    marker_color='#3E4248',
+                    text=disc_tests['Total'].apply(lambda t: str(int(t))),
+                    textposition='outside',
+                    textfont=dict(color='#8A8F98', family='Barlow, sans-serif', size=11)
+                ))
+                fig.update_layout(
+                    barmode='stack',
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                    font=dict(family='Barlow, sans-serif', size=11, color='#8A8F98'),
+                    margin=dict(t=10, b=10, l=10, r=40),
+                    legend=dict(bgcolor='rgba(0,0,0,0)',
+                                font=dict(color='#8A8F98'), orientation='h',
+                                x=0.5, xanchor='center', y=-0.08),
+                    xaxis=dict(gridcolor='#3E4248', tickfont=dict(color='#8A8F98')),
+                    yaxis=dict(tickfont=dict(size=10, color='#8A8F98')),
+                    height=max(250, len(disc_tests) * 45)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                 
+
             if 'asset_type' in tests.columns:
                 section("Pass Rate by Equipment Type")
                 asset_tests = tests.groupby('asset_type').agg(
@@ -484,68 +559,158 @@ def render(config: dict, filters: dict, all_sheets: dict = None):
                 st.dataframe(tests[view_cols], use_container_width=True, hide_index=True)
 
     # ══════════════════════════════════════════════════════════════
-    # TAB 4 — VERTICAL CONVEYANCE
+    # TAB 4 — EQUIPMENT
     # ══════════════════════════════════════════════════════════════
     with tab4:
-        if issues_raw.empty:
-            st.info("No Vertical Conveyance issues found.")
+        equipment = safe_get(all_sheets, 'Equipment')
+        if equipment.empty:
+            st.info("No equipment data available.")
         else:
-            vc_issues = issues_raw[
-                issues_raw['discipline'].str.contains('14|Conveying', na=False, case=False)
-            ].copy()
-            vc_issues = apply_filters(vc_issues, filters)
+            # ── Merge checklist/test/issue counts onto equipment ──
+            eq = equipment.copy()
+            eq['equipment_id'] = eq['equipment_id'].astype(str)
 
-            if vc_issues.empty:
-                st.info("No Vertical Conveyance issues found.")
+            verified_eq = ['Checklist Complete', 'Verified', 'Verified - Not Included in Sampling']
+
+            if not checklists_raw.empty and 'asset_key' in checklists_raw.columns:
+                cl_agg = checklists_raw.groupby(checklists_raw['asset_key'].astype(str)).agg(
+                    Checklists=('status', 'count'),
+                    CL_Complete=('status', lambda x: x.isin(verified_eq).sum())
+                ).reset_index()
+                eq = eq.merge(cl_agg, left_on='equipment_id', right_on='asset_key', how='left').drop(columns='asset_key', errors='ignore')
             else:
-                vc_open = vc_issues[vc_issues['status'] != 'Closed']
+                eq['Checklists'] = 0; eq['CL_Complete'] = 0
 
-                section("Vertical Conveyance — Issue Summary")
-                c1, c2, c3, c4 = st.columns(4)
-                with c1: kpi_card("Total VC Issues", len(vc_issues), "kpi-white")
-                with c2: kpi_card("Open", len(vc_issues[vc_issues['status'] == 'Open']), "kpi-red")
-                with c3: kpi_card("In Progress", len(vc_issues[vc_issues['status'] == 'In Progress']), "kpi-blue")
-                with c4: kpi_card("Closed", len(vc_issues[vc_issues['status'] == 'Closed']), "kpi-green")
+            if not tests_raw.empty and 'asset_key' in tests_raw.columns:
+                ts_agg = tests_raw.groupby(tests_raw['asset_key'].astype(str)).agg(
+                    Tests=('status', 'count'),
+                    Tests_Passed=('status', lambda x: (x == 'Passed').sum())
+                ).reset_index()
+                eq = eq.merge(ts_agg, left_on='equipment_id', right_on='asset_key', how='left').drop(columns='asset_key', errors='ignore')
+            else:
+                eq['Tests'] = 0; eq['Tests_Passed'] = 0
 
-                col_l, col_r = st.columns(2)
-                with col_l:
-                    if not vc_open.empty:
-                        priority_vc = vc_open['priority'].value_counts().reset_index()
-                        priority_vc.columns = ['Priority', 'Count']
-                        colors = {
-                            'High (Will Impact Performance)': '#E04040',
-                            'Moderate (May Impact Performance)': '#F4B942',
-                            "Low (Won't Impact Performance)": '#39B54A'
-                        }
-                        color_list = [colors.get(p, '#8A8F98') for p in priority_vc['Priority']]
-                        st.plotly_chart(plotly_donut(priority_vc['Priority'], priority_vc['Count'],
-                                                     "Open VC Issues by Priority", color_list),
-                                        use_container_width=True)
+            if not issues_raw.empty and 'asset_key' in issues_raw.columns:
+                iss_agg = issues_raw.groupby(issues_raw['asset_key'].astype(str)).agg(
+                    Issues=('status', 'count'),
+                    Open_Issues=('status', lambda x: (x != 'Closed').sum())
+                ).reset_index()
+                eq = eq.merge(iss_agg, left_on='equipment_id', right_on='asset_key', how='left').drop(columns='asset_key', errors='ignore')
+            else:
+                eq['Issues'] = 0; eq['Open_Issues'] = 0
 
-                with col_r:
-                    status_vc = vc_issues['status'].value_counts().reset_index()
-                    status_vc.columns = ['Status', 'Count']
-                    status_colors = {
-                        'Open': '#E04040', 'In Progress': '#4A90D9',
-                        'Pending Review': '#F4B942', 'Closed': '#39B54A'
-                    }
-                    st.plotly_chart(plotly_bar(status_vc, 'Status', 'Count',
-                                               'VC Issues by Status', color='Status',
-                                               color_map=status_colors),
+            for c in ['Checklists', 'CL_Complete', 'Tests', 'Tests_Passed', 'Issues', 'Open_Issues']:
+                eq[c] = eq[c].fillna(0).astype(int)
+
+            # ── Location filters ──
+            section("Equipment Overview")
+            f1, f2 = st.columns(2)
+            with f1:
+                floors = ['All'] + sorted(eq['floor'].dropna().unique().tolist())
+                sel_floor = st.selectbox("Floor", floors, key="eq_floor")
+            with f2:
+                spaces = ['All'] + sorted(eq['space'].dropna().unique().tolist())
+                sel_space = st.selectbox("Space", spaces, key="eq_space")
+
+            if sel_floor != 'All':
+                eq = eq[eq['floor'] == sel_floor]
+            if sel_space != 'All':
+                eq = eq[eq['space'] == sel_space]
+
+            # ── KPIs ──
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1: kpi_card("Total Equipment", len(eq), "kpi-white")
+            with c2: kpi_card("Checklists", eq['Checklists'].sum(), "kpi-blue",
+                              f"{eq['CL_Complete'].sum()} complete")
+            with c3: kpi_card("Tests", eq['Tests'].sum(), "kpi-blue",
+                              f"{eq['Tests_Passed'].sum()} passed")
+            with c4: kpi_card("Open Issues", eq['Open_Issues'].sum(),
+                              "kpi-red" if eq['Open_Issues'].sum() > 0 else "kpi-green")
+            with c5:
+                eq_with_cl = (eq['Checklists'] > 0).sum()
+                kpi_card("Has Checklists", f"{eq_with_cl}/{len(eq)}", "kpi-yellow",
+                         f"{eq_with_cl/len(eq)*100:.0f}% coverage" if len(eq) > 0 else "")
+
+            # ── Charts ──
+            col_l, col_r = st.columns(2)
+            with col_l:
+                if 'type' in eq.columns:
+                    type_summary = eq.groupby('type').agg(
+                        Count=('equipment_id', 'count'),
+                        Checklists=('Checklists', 'sum'),
+                        Tests=('Tests', 'sum')
+                    ).reset_index().sort_values('Count', ascending=True)
+
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(
+                        y=type_summary['type'], x=type_summary['Count'],
+                        name='Equipment', orientation='h', marker_color='#3E4248'
+                    ))
+                    fig.add_trace(go.Bar(
+                        y=type_summary['type'], x=type_summary['Checklists'],
+                        name='Checklists', orientation='h', marker_color='#4A90D9'
+                    ))
+                    fig.add_trace(go.Bar(
+                        y=type_summary['type'], x=type_summary['Tests'],
+                        name='Tests', orientation='h', marker_color='#39B54A'
+                    ))
+                    fig.update_layout(
+                        barmode='group',
+                        title=dict(text='Equipment / Checklists / Tests by Type',
+                                   font=dict(size=12, color='#8A8F98', family='Barlow Condensed')),
+                        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                        font=dict(family='Barlow, sans-serif', size=11, color='#8A8F98'),
+                        margin=dict(t=40, b=10, l=10, r=10),
+                        legend=dict(bgcolor='rgba(0,0,0,0)', font=dict(color='#8A8F98'),
+                                    orientation='h', x=0.5, xanchor='center', y=-0.08),
+                        xaxis=dict(gridcolor='#3E4248', tickfont=dict(color='#8A8F98')),
+                        yaxis=dict(tickfont=dict(size=10, color='#8A8F98')),
+                        height=max(300, len(type_summary) * 40)
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+            with col_r:
+                if 'discipline' in eq.columns:
+                    disc_summary = eq.groupby('discipline').agg(
+                        Equipment=('equipment_id', 'count'),
+                        Checklists=('Checklists', 'sum'),
+                        CL_Complete=('CL_Complete', 'sum')
+                    ).reset_index()
+                    disc_summary['CL Completion %'] = (
+                        disc_summary['CL_Complete'] / disc_summary['Checklists'] * 100
+                    ).fillna(0).round(1)
+                    disc_summary = disc_summary.sort_values('Equipment', ascending=True)
+                    st.plotly_chart(plotly_hbar_pct(disc_summary, 'discipline', 'CL Completion %',
+                                                    'Checklist Completion % by Discipline'),
                                     use_container_width=True)
 
-                section("Open Vertical Conveyance Issues")
-                display_cols = [c for c in ['name', 'priority', 'status', 'days_open',
-                                            'assigned_company', 'aging_category',
-                                            'description'] if c in vc_open.columns]
-                vc_display = vc_open[display_cols].copy()
-                if 'aging_category' in vc_display.columns:
-                    vc_display['aging_category'] = vc_display['aging_category'].apply(
-                        lambda c: '🔴 >60 Days' if c == '>60 Days'
-                        else '🟡 45-60 Days' if c == '45-60 Days' else '🟢 Under 45'
-                    )
-                st.dataframe(vc_display.rename(columns={
-                    'name': 'Issue #', 'priority': 'Priority', 'status': 'Status',
-                    'days_open': 'Days Open', 'assigned_company': 'Contractor',
-                    'aging_category': 'Aging', 'description': 'Description'
+            # ── Floor breakdown ──
+            if 'floor' in eq.columns:
+                section("By Floor")
+                floor_summary = eq.groupby('floor').agg(
+                    Equipment=('equipment_id', 'count'),
+                    Checklists=('Checklists', 'sum'),
+                    CL_Complete=('CL_Complete', 'sum'),
+                    Tests=('Tests', 'sum'),
+                    Tests_Passed=('Tests_Passed', 'sum'),
+                    Open_Issues=('Open_Issues', 'sum')
+                ).reset_index()
+                floor_summary['CL %'] = (
+                    floor_summary['CL_Complete'] / floor_summary['Checklists'] * 100
+                ).fillna(0).round(1)
+                st.dataframe(floor_summary.rename(columns={
+                    'floor': 'Floor', 'CL_Complete': 'CL Done',
+                    'Tests_Passed': 'Tests Passed', 'Open_Issues': 'Open Issues'
+                }), use_container_width=True, hide_index=True)
+
+            # ── Full equipment table ──
+            with st.expander("📄 View All Equipment"):
+                display_cols = [c for c in ['name', 'type', 'discipline', 'floor', 'space',
+                                             'Checklists', 'CL_Complete', 'Tests',
+                                             'Tests_Passed', 'Issues', 'Open_Issues']
+                                if c in eq.columns]
+                st.dataframe(eq[display_cols].rename(columns={
+                    'name': 'Asset', 'type': 'Type', 'discipline': 'Discipline',
+                    'floor': 'Floor', 'space': 'Space', 'CL_Complete': 'CL Done',
+                    'Tests_Passed': 'Tests Passed', 'Open_Issues': 'Open Issues'
                 }), use_container_width=True, hide_index=True)
