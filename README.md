@@ -1,179 +1,474 @@
-# CriticalArc Commissioning Dashboard
+# CriticalArc Commissioning Dashboard — Aviation Template
 
-A Streamlit-based dashboard for tracking commissioning progress across aviation and data center projects. Pulls real-time data from the CxAlloy API and presents it through interactive visualizations.
+A Streamlit dashboard for tracking commissioning progress on aviation projects. Pulls data from the CxAlloy API, syncs it to a local SQLite database, and renders interactive visualizations — loading in seconds instead of minutes.
 
 ---
 
-## Overview
+## Table of Contents
 
-This dashboard provides a centralized view of commissioning activities for CriticalArc projects, designed as a reusable template that can be applied across multiple project types. It connects to CxAlloy's API to pull issues, checklists, functional tests, and equipment data, then displays key metrics and progress tracking through a tabbed interface.
+1. [How It Works](#how-it-works)
+2. [Data Flow](#data-flow)
+3. [Project Structure](#project-structure)
+4. [File-by-File Breakdown](#file-by-file-breakdown)
+5. [Setup](#setup)
+6. [Running the Dashboard](#running-the-dashboard)
+7. [Understanding the Data](#understanding-the-data)
+8. [Dashboard Tabs & Analysis](#dashboard-tabs--analysis)
+9. [Configuration](#configuration)
+10. [Creating a New Project from This Template](#creating-a-new-project-from-this-template)
+11. [Deploying to Streamlit Cloud](#deploying-to-streamlit-cloud)
+12. [Troubleshooting](#troubleshooting)
 
-### Dashboard Tabs
+---
 
-- **Issue Tracking** — Open issues, aging reports, priority breakdowns, issues by division and contractor
-- **Checklist (PFC)** — Pre-functional checklist pipeline, completion by discipline and contractor, pending assignments
-- **Functional Tests** — Test pass rates, attempt tracking, tests by division and equipment type
-- **Equipment** — Equipment inventory with linked checklists/tests/issues, filterable by floor and space
+## How It Works
+
+The dashboard solves a core problem: the CxAlloy API can take several minutes to return data for large projects. Instead of making users wait on every page load, a background sync process pulls data on a schedule and stores it locally in SQLite. The dashboard reads from this local database, making page loads near-instant.
+
+```
+CxAlloy API → sync_logic.py → dashboard_data.db → cxalloy.py reads DB → cleaning.py → layout.py renders
+```
+
+The first time the app runs, data is pulled from the API and stored locally. Every subsequent page load reads from SQLite in milliseconds. The sync repeats every 12 hours to keep data fresh.
+
+On Streamlit Cloud, a background thread handles the sync automatically. The database file is committed to the repo so the app has data immediately on deploy.
+
+---
+
+## Data Flow
+
+### Step 1: Sync (sync_logic.py)
+
+The sync process authenticates with CxAlloy using HMAC-SHA256 signatures, then pulls six datasets for each project:
+
+| Endpoint | Method | Dataset | What It Contains |
+|----------|--------|---------|------------------|
+| `/project` | GET | Projects | Project list with IDs, names, status |
+| `/issue` | POST | Issues | Deficiencies, punch list items, RFIs |
+| `/checklist` | POST | Checklists | Pre-functional checklists by level |
+| `/test` | POST | Tests | Functional performance tests |
+| `/person` | GET | People | Team members assigned to the project |
+| `/company` | GET | Companies | Contractor and subcontractor firms |
+| `/equipment` | GET | Equipment | Mechanical/electrical units with attributes |
+
+Each dataset is paginated (500 records per page). The sync fetches all pages, then writes results to SQLite. Nested JSON fields are serialized as JSON strings. If different projects have different columns, missing columns are automatically added to the table.
+
+### Step 2: Read (utils/cxalloy.py)
+
+`load_project_data()` checks if `dashboard_data.db` exists. If yes, reads from SQLite (milliseconds). If no, falls back to live API calls (minutes).
+
+### Step 3: Clean (utils/cleaning.py)
+
+`clean_all()` standardizes columns, flattens extended_status dates, resolves company lookups, calculates aging, and parses dates.
+
+### Step 4: Filter (utils/filters.py)
+
+Sidebar filters by discipline, status, contractor, and date range.
+
+### Step 5: Render (layout.py)
+
+Filtered data rendered as Plotly charts, KPI cards, and data tables across tabs.
 
 ---
 
 ## Project Structure
 
 ```
-criticalarc-dashboard/
-├── app.py                  # Main Streamlit app — config, sidebar, global CSS
-├── layout.py               # Tab rendering, charts, KPI cards
-├── config.py               # Project configuration
-├── inspect_data.py         # Utility to dump API data to CSV for debugging
-├── requirements.txt        # Python dependencies
-├── README.md
-├── .gitignore
-├── .streamlit/
-│   └── secrets.toml        # API credentials (NOT committed)
+SMF-Dashboard.AVIATION-TEMPLATE/
+│
+├── app.py                   # Entry point — config, sidebar, CSS, launches everything
+├── layout.py                # All visualizations — charts, KPIs, tables across tabs
+├── config.py                # Project-specific settings (statuses, colors, pipeline)
+│
+├── sync_logic.py            # Core sync engine — API calls + SQLite writes
+├── sync_job.py              # Local runner — calls sync_logic on a timer
+├── background_sync.py       # Cloud runner — daemon thread for Streamlit Cloud
+│
 ├── utils/
-│   ├── cxalloy.py          # CxAlloy API client — auth, data fetching
-│   ├── cleaning.py         # Data cleaning, column standardization, lookups
-│   └── filters.py          # Sidebar filter logic
-└── data/                   # Local CSV cache (auto-generated by inspect_data.py)
+│   ├── cxalloy.py           # Data loader — reads SQLite or falls back to API
+│   ├── cleaning.py          # Data transformation — standardize, flatten, resolve lookups
+│   └── filters.py           # Sidebar filter application
+│
+├── .streamlit/
+│   └── secrets.toml         # API credentials (NEVER commit this)
+│
+├── data/                    # CSV exports from inspect_data.py (for debugging)
+├── dashboard_data.db        # SQLite database (auto-generated, committed to repo)
+├── inspect_data.py          # Debug utility — dumps raw API data to CSVs
+├── requirements.txt         # Python dependencies
+├── .gitignore
+└── README.md
 ```
 
 ---
 
-## Creating a New Project Dashboard (Step by Step)
+## File-by-File Breakdown
 
-### Step 1 — Create a New Repo from the Template
+### app.py — The Entry Point
 
-1. Go to the template repo on GitHub: `https://github.com/YOUR_USERNAME/criticalarc-dashboard`
-2. Click the green **"Use this template"** button → **"Create a new repository"**
-3. Name it something project-specific (e.g. `terminal-b-dashboard`, `datacenter-west-dashboard`)
-4. Keep it **public** or **private** — either works (just never commit secrets)
-5. Click **"Create repository"**
+Handles page config, starts the background sync thread, loads the project list for the sidebar, renders filters, applies global CSS, and calls `layout.render()`. Run with: `streamlit run app.py`
 
-### Step 2 — Clone and Set Up Locally
+### layout.py — All Visualizations
 
-Open a terminal and run:
+`render()` builds tabs with Plotly charts, KPI cards, and data tables. Each tab: extract data → compute metrics → render visuals.
 
-```bash
-git clone https://github.com/YOUR_USERNAME/your-new-repo-name.git
-cd your-new-repo-name
-```
+### config.py — Project Configuration
 
-Create a virtual environment and install dependencies:
+Controls statuses, pipeline stages, and branding. First file to update for a new project.
 
-```bash
-python -m venv venv
-```
+### sync_logic.py — The Sync Engine
 
-Activate it:
-- **Windows:** `venv\Scripts\activate`
-- **macOS/Linux:** `source venv/bin/activate`
+Shared logic for local and cloud sync: HMAC auth, paginated API calls, SQLite writes with automatic schema migration (adds missing columns when projects have different data shapes).
 
-Install packages:
+### sync_job.py — Local Sync Runner
 
-```bash
-pip install -r requirements.txt
-```
+Runs `sync_all()` immediately then repeats every 12 hours via APScheduler.
 
-### Step 3 — Add Your CxAlloy Credentials
+### background_sync.py — Cloud Sync Runner
 
-Create the secrets file:
+Starts a daemon thread on app startup. Works on both local and Streamlit Cloud.
 
-```bash
-mkdir .streamlit
-```
+### utils/cxalloy.py — Data Loader
 
-Create `.streamlit/secrets.toml` and add your project's CxAlloy API credentials:
+Reads from SQLite if database exists, falls back to live API. Cached with `@st.cache_data(ttl=60)`.
 
-```toml
-[cxalloy]
-api_key = "your-project-api-key"
-identifier = "your-project-identifier"
-```
+### utils/cleaning.py — Data Cleaning
 
-⚠️ **This file must NEVER be committed to GitHub.** It is already listed in `.gitignore`.
+`clean_all()` orchestrates: `clean_issues()`, `clean_checklists()`, `clean_tests()`, `clean_equipment()`.
 
-### Step 4 — Verify the Data
+### utils/filters.py — Sidebar Filters
 
-Run the inspection script to pull data from the API and save it locally:
+`apply_filters()` takes a DataFrame and filter dict, returns matching rows.
 
-```bash
-python inspect_data.py
-```
+### inspect_data.py — Debug Utility
 
-Check the `data/` folder — you should see CSV files for each data type (Issues, Checklists, Tests, Equipment, People, Companies). Open them to verify:
-- Column names look correct
-- Rows have real data
-- No auth errors or empty files
+Dumps raw API data to CSV in `data/`. Run with `python inspect_data.py`.
 
-### Step 5 — Run the Dashboard Locally
+---
+
+## Setup
+
+### Prerequisites
+
+- Python 3.11+
+- A CxAlloy API account with identifier and secret
+- VS Code (recommended)
+- VS Code extension: **SQLite Viewer** (optional, for browsing the database)
+
+### Installation
+
+1. Clone the repo:
+   ```bash
+   git clone https://github.com/kspann-hub/SMF-Dashboard.AVIVATION-TEMPLATE.git
+   cd SMF-Dashboard.AVIVATION-TEMPLATE
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Create your secrets file at `.streamlit/secrets.toml`:
+   ```toml
+   [cxalloy]
+   identifier = "your-identifier-here"
+   secret = "your-secret-here"
+   ```
+
+---
+
+## Running the Dashboard
+
+### Quick Start (single terminal)
 
 ```bash
 streamlit run app.py
 ```
 
-The dashboard will open at `http://localhost:8501`. Verify all four tabs load with data.
+Background sync starts automatically. If `dashboard_data.db` exists (committed in repo), the app loads instantly. Sync refreshes every 12 hours.
 
-### Step 6 — Deploy to Streamlit Community Cloud
+### Development Mode (two terminals)
 
-1. Push your code to GitHub:
-   ```bash
-   git add .
-   git commit -m "initial setup for new project"
-   git push
+```bash
+# Terminal 1 — sync data (Ctrl+Shift+5 in VS Code to split)
+python sync_job.py
+
+# Terminal 2 — run dashboard
+streamlit run app.py
+```
+
+### Inspecting Raw Data
+
+```bash
+python inspect_data.py
+```
+
+### Querying the Database Directly
+
+```bash
+# Row counts
+python -c "
+import sqlite3
+conn = sqlite3.connect('dashboard_data.db')
+for table in ['Issues', 'Checklists', 'Tests', 'People', 'Companies', 'Equipment']:
+    try:
+        count = conn.execute(f'SELECT COUNT(*) FROM [{table}]').fetchone()[0]
+        print(f'{table}: {count} rows')
+    except: pass
+"
+
+# Check statuses
+python -c "
+import sqlite3, pandas as pd
+conn = sqlite3.connect('dashboard_data.db')
+print(pd.read_sql('SELECT DISTINCT status FROM [Issues]', conn))
+print(pd.read_sql('SELECT DISTINCT status FROM [Checklists]', conn))
+"
+
+# Last sync time
+python -c "
+import sqlite3, pandas as pd
+conn = sqlite3.connect('dashboard_data.db')
+print(pd.read_sql('SELECT * FROM _sync_log ORDER BY synced_at DESC LIMIT 5', conn))
+"
+```
+
+---
+
+## Understanding the Data
+
+### Issues
+
+Deficiencies, punch list items, or problems found during commissioning.
+
+| Field | Description |
+|-------|-------------|
+| `name` | Issue identifier |
+| `status` | Open, In Progress, Pending Review, Closed |
+| `priority` | Severity level |
+| `discipline` | Trade/division |
+| `assigned_company` | Contractor (resolved from lookup) |
+| `days_open` | Calculated age in days |
+| `aging_category` | ">60 Days", "45-60 Days", or "Under 45 Days" |
+
+### Checklists
+
+Pre-functional checklists verifying equipment installation before testing.
+
+| Field | Description |
+|-------|-------------|
+| `status` | Workflow status |
+| `discipline` | Trade responsible |
+| `assigned_company` | Contractor assigned |
+| Pipeline dates | `script_in_development_date`, `assigned_date`, `in_progress_date`, `contractor_complete_date`, `verified_date` |
+
+### Tests
+
+Functional performance tests run after checklists complete.
+
+| Field | Description |
+|-------|-------------|
+| `status` | Passed, Failed, Not Started, In Progress |
+| `asset_name` | Equipment unit being tested |
+| `attempt_count` | Number of test attempts |
+
+### Equipment
+
+Physical equipment units tracked in the project.
+
+| Field | Description |
+|-------|-------------|
+| `name` | Equipment tag/identifier |
+| `type` | Equipment category |
+| `status` | Delivery/installation status |
+| `attributes` | JSON with floor, zone, and other metadata |
+
+---
+
+## Dashboard Tabs & Analysis
+
+### Tab 1: Issue Tracking
+
+KPI cards (open issues, aging, high priority), priority donut, status bar chart, issues by division and contractor, open issues detail table.
+
+**Answers:** Which contractors have the most unresolved issues? Are issues aging out? Which disciplines generate the most deficiencies?
+
+### Tab 2: Checklist (PFC)
+
+Pipeline progress, completion by discipline and contractor, pending assignments.
+
+**Answers:** What percentage of checklists are complete per trade? Which contractors are behind? Any checklists still unassigned?
+
+### Tab 3: Functional Tests
+
+Pass rates, results by equipment unit and contractor, attempt tracking.
+
+**Answers:** What's the overall pass rate? Which units are failing? Which contractors produce the best results?
+
+### Tab 4: Vertical Conveyance / Equipment
+
+Equipment inventory linked to checklists, tests, and issues. Filterable by floor and space.
+
+**Answers:** Which equipment has incomplete checklists? Which has open issues blocking progress?
+
+---
+
+## Configuration
+
+Edit `config.py` to match your project. To discover what values exist:
+
+```bash
+python -c "
+import sqlite3, pandas as pd, json
+conn = sqlite3.connect('dashboard_data.db')
+print('=== Issue Statuses ===')
+print(pd.read_sql('SELECT DISTINCT status FROM [Issues]', conn))
+print()
+print('=== Checklist Statuses ===')
+print(pd.read_sql('SELECT DISTINCT status FROM [Checklists]', conn))
+print()
+print('=== Extended Status Fields ===')
+df = pd.read_sql('SELECT extended_status FROM [Checklists] LIMIT 5', conn)
+for val in df['extended_status']:
+    try:
+        print(list(json.loads(val).keys()))
+        break
+    except: pass
+"
+```
+
+Update `config.py` and the `flatten_extended_status` call in `cleaning.py` to match.
+
+### Sync Interval
+
+- **Local:** edit `SYNC_INTERVAL_MINUTES` in `sync_job.py`
+- **Cloud:** edit `interval_hours` in `start_background_sync()` call in `app.py`
+
+---
+
+## Creating a New Project from This Template
+
+### Step 1 — Create a New Repo
+
+Go to this repo on GitHub → **"Use this template"** → **"Create a new repository"** → name it for the project.
+
+### Step 2 — Clone and Install
+
+```bash
+git clone https://github.com/YOUR_USERNAME/your-new-repo.git
+cd your-new-repo
+pip install -r requirements.txt
+```
+
+### Step 3 — Add Credentials
+
+Create `.streamlit/secrets.toml`:
+
+```toml
+[cxalloy]
+identifier = "your-identifier-here"
+secret = "your-secret-here"
+```
+
+### Step 4 — Sync Data
+
+```bash
+python sync_job.py
+```
+
+Watch for row counts. Verify with SQLite Viewer or query commands.
+
+### Step 5 — Update Config
+
+Run the status discovery commands, then update `config.py` and `cleaning.py`.
+
+### Step 6 — Run and Verify
+
+```bash
+streamlit run app.py
+```
+
+### Step 7 — Commit and Deploy
+
+```bash
+git add -A
+git commit -m "Initial setup with synced data"
+git push
+```
+
+---
+
+## Deploying to Streamlit Cloud
+
+1. Push all files to GitHub (`secrets.toml` in `.gitignore`, `dashboard_data.db` NOT in `.gitignore`)
+2. Connect repo at [share.streamlit.io](https://share.streamlit.io)
+3. Add credentials under **Settings → Secrets**:
+   ```toml
+   [cxalloy]
+   identifier = "your-identifier-here"
+   secret = "your-secret-here"
    ```
-2. Go to [share.streamlit.io](https://share.streamlit.io) and sign in with GitHub
-3. Click **"New app"**
-4. Select your new repo, branch (`master` or `main`), and set main file path to `app.py`
-5. Click **"Advanced settings"** → paste the contents of your `secrets.toml` file
-6. Set a custom URL (e.g. `terminal-b-dashboard.streamlit.app`)
-7. Click **Deploy**
+4. Deploy — loads instantly from committed database, background sync keeps it fresh
 
-Your dashboard will be live in a few minutes.
+**Note:** Streamlit Cloud apps sleep after inactivity. On wake, they re-clone the repo — because `dashboard_data.db` is in the repo, the app has data immediately.
+
+---
+
+## Troubleshooting
+
+**"No data available" on all tabs**
+- Sync hasn't finished. Check terminal for progress. Verify credentials. Run `python sync_job.py` manually.
+
+**"Found 0 projects"**
+- Check API credentials. Test: `python -c "from sync_logic import api_get; print(api_get('project'))"`
+
+**"type dict is not supported" during sync**
+- Verify `save_to_db()` in `sync_logic.py` has the dict/list to JSON conversion loop.
+
+**"table X has no column named Y"**
+- Different projects have different columns. Verify `save_to_db()` has the ALTER TABLE logic.
+
+**"UnboundLocalError: cannot access local variable"**
+- A dataset is missing from `all_sheets`. Ensure all keys use `.get()` fallbacks in `layout.py`.
+
+**Charts show wrong percentages**
+- Check `config.py` statuses match actual data. Check `cleaning.py` for empty strings vs `pd.NA`.
+
+**Git push rejected**
+- `git pull --rebase` then `git push`. If stuck: `git rebase --abort` then retry. Last resort: `git push --force`.
+
+---
+
+## Security
+
+- **NEVER commit `.streamlit/secrets.toml`** to GitHub
+- Credentials go in two places only: local `secrets.toml` and Streamlit Cloud Secrets settings
+- If accidentally committed, immediately rotate your API key in CxAlloy
 
 ---
 
 ## Customization
 
-If the new project has different needs, here's what to change:
-
 | What's Different | File to Edit |
 |---|---|
 | Status labels or pipeline stages | `config.py` |
 | Column names from CxAlloy | `utils/cleaning.py` |
-| API connection or endpoints | `utils/cxalloy.py` |
-| Chart types, KPI cards, tab layout | `layout.py` |
+| API endpoints | `utils/cxalloy.py` and `sync_logic.py` |
+| Charts, KPI cards, tab layout | `layout.py` |
 | Sidebar filters | `utils/filters.py` and `app.py` |
-| Branding (colors, fonts, logo) | CSS section in `app.py` |
+| Branding (colors, fonts) | CSS section in `app.py` |
+| Sync interval | `sync_job.py` or `background_sync.py` call in `app.py` |
 
 ---
 
-## Security Reminders
-
-- **NEVER commit `.streamlit/secrets.toml`** to GitHub
-- API credentials go in two places only: your local `secrets.toml` and Streamlit Cloud's Advanced Settings
-- If secrets are ever accidentally committed:
-  1. **Immediately rotate your API key** in CxAlloy
-  2. Update the new key in your local `secrets.toml` and Streamlit Cloud
-  3. The old key in git history is now dead
-- Run `git log --all -p | grep -i "api_key\|secret\|password\|token"` to check for leaks
-
----
-
-## Dependencies
-
-- `streamlit` — Web app framework
-- `pandas` — Data processing
-- `plotly` — Interactive charts
-- `requests` — CxAlloy API calls
-
----
-
-## Data Flow
+## .gitignore
 
 ```
-CxAlloy API → utils/cxalloy.py → utils/cleaning.py → layout.py → Streamlit UI
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+data/
+venv/
 ```
 
-1. **cxalloy.py** authenticates and fetches raw data (issues, checklists, tests, equipment, people, companies)
-2. **cleaning.py** standardizes columns, resolves assignments, flattens nested status fields, and builds company/person lookups
-3. **layout.py** applies filters, computes KPIs, and renders charts across four tabs
+Note: `dashboard_data.db` is intentionally NOT in `.gitignore` — it needs to be in the repo for Streamlit Cloud to have data on deploy.
