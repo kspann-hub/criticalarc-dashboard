@@ -3,8 +3,12 @@ import os
 import pandas as pd
 import importlib.util
 from datetime import datetime
+import json
 
 from utils.cxalloy import load_all_projects, load_project_data
+
+from background_sync import start_background_sync
+start_background_sync()
 
 # ─── Page Config ──────────────────────────────────────────────────────────────
 st.set_page_config(
