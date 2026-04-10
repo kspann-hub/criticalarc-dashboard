@@ -116,7 +116,6 @@ def save_to_db(table_name: str, project_id: int, df: pd.DataFrame):
         return
     df = df.copy()
     df["_project_id"] = project_id
-    # Convert nested dicts/lists to JSON strings
     for col in df.columns:
         if df[col].apply(lambda x: isinstance(x, (dict, list))).any():
             df[col] = df[col].apply(
@@ -126,11 +125,19 @@ def save_to_db(table_name: str, project_id: int, df: pd.DataFrame):
     try:
         conn.execute(f"DELETE FROM [{table_name}] WHERE _project_id = ?", (project_id,))
     except sqlite3.OperationalError:
-        pass  # Table doesn't exist yet — to_sql will create it
+        pass
+    # Add any missing columns to the table
+    try:
+        existing_cols = [row[1] for row in conn.execute(f"PRAGMA table_info([{table_name}])").fetchall()]
+        for col in df.columns:
+            if col not in existing_cols:
+                conn.execute(f"ALTER TABLE [{table_name}] ADD COLUMN [{col}] TEXT")
+    except sqlite3.OperationalError:
+        pass  # Table doesn't exist yet, to_sql will create it
+
     df.to_sql(table_name, conn, if_exists="append", index=False)
     conn.commit()
     conn.close()
-
 
 # ── Sync Logic ──────────────────────────────────────────────────────
 
